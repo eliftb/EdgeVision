@@ -80,6 +80,13 @@ def test_label_stays_inside_frame_for_box_at_top_edge():
     assert (frame[:20, :60] != 128).any()
 
 
+def test_label_slides_left_for_box_at_right_edge():
+    frame = grey_frame()
+    draw_detections(frame, [Detection((300, 100, 319, 200), 0.9, 1, "bicycle")])
+    # The tag is wider than the 20 px box, so it must extend to the left of it.
+    assert (frame[80:100, 250:295] != 128).any()
+
+
 def test_status_line_is_drawn_at_the_bottom():
     frame = grey_frame()
     draw_status(frame, "pytorch  30 fps  2 objects")
@@ -144,15 +151,16 @@ def test_warmup_calls_are_not_timed():
             return ["x"]
 
     fake = FakeDetector()
-    times, detections = time_detector(fake, grey_frame(), runs=7, warmup=3)
+    times, network_ms, detections = time_detector(fake, grey_frame(), runs=7, warmup=3)
     assert fake.calls == 10 and len(times) == 7 and detections == ["x"]
+    assert network_ms == 0.0   # the fake reports no network time
 
 
 def test_table_reports_speedup_and_failed_backends():
     table = format_table([
-        Result("pytorch-fp32", "m.pt", 6.2, 10.0, 10.0, 11.0, 100.0, 6),
-        Result("tensorrt-fp16", "m.engine", 8.0, 2.5, 2.5, 3.0, 400.0, 6),
-        Result("onnxruntime", "", 0, 0, 0, 0, 0, 0, error="ImportError: no onnxruntime"),
+        Result("pytorch-fp32", "m.pt", 6.2, 10.0, 10.0, 11.0, 100.0, 7.0, 6),
+        Result("tensorrt-fp16", "m.engine", 8.0, 2.5, 2.5, 3.0, 400.0, 1.2, 6),
+        Result("onnxruntime", "", 0, 0, 0, 0, 0, 0, 0, error="ImportError: no onnxruntime"),
     ])
     assert "4.00x" in table and "1.00x" in table
     assert "failed: ImportError" in table

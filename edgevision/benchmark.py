@@ -36,10 +36,11 @@ class Result:
     backend: str
     file: str
     size_mb: float
-    mean_ms: float
+    mean_ms: float                # whole frame: preprocessing + network + NMS
     p50_ms: float
     p95_ms: float
     fps: float
+    network_ms: float             # network forward pass alone
     detections: int               # objects found in the test frame
     map50_95: float | None = None
     error: str | None = None
@@ -55,15 +56,17 @@ def summarise(times_ms: list[float]) -> dict:
 
 
 def time_detector(detector, frame: np.ndarray, runs: int, warmup: int):
-    """Per-frame latency in ms after `warmup` discarded calls, and the last output."""
+    """Per-frame latency in ms after `warmup` discarded calls, the mean time spent
+    in the network alone, and the last output."""
     for _ in range(warmup):   # cuDNN autotuning, lazy CUDA init, engine context creation
         detector.detect(frame)
-    times, detections = [], []
+    times, network, detections = [], [], []
     for _ in range(runs):
         t0 = time.perf_counter()
         detections = detector.detect(frame)
         times.append((time.perf_counter() - t0) * 1000)
-    return times, detections
+        network.append(getattr(detector, "last_network_ms", 0.0))
+    return times, statistics.fmean(network), detections
 
 
 def run_backend(name: str, weights: Path, frame: np.ndarray, runs: int, warmup: int,
@@ -72,16 +75,37 @@ def run_backend(name: str, weights: Path, frame: np.ndarray, runs: int, warmup: 
     try:
         path = export(weights, fmt, half) if fmt else weights
         detector = Detector(path, half=half)
-        times, detections = time_detector(detector, frame, runs, warmup)
+        times, network_ms, detections = time_detector(detector, frame, runs, warmup)
         result = Result(backend=name, file=path.name, size_mb=path.stat().st_size / 2**20,
-                        detections=len(detections), **summarise(times))
-        if accuracy:
-            metrics = detector.model.val(data="coco128.yaml", imgsz=640, half=detector.half,
-                                         device=detector.device, verbose=False, plots=False)
-            result.map50_95 = float(metrics.box.map)
-        return result
+                        network_ms=network_ms, detections=len(detections), **summarise(times))
     except Exception as exc:   # a missing runtime should not sink the other backends
-        return Result(name, "", 0, 0, 0, 0, 0, 0, error=f"{type(exc).__name__}: {exc}")
+        return Result(name, "", 0, 0, 0, 0, 0, 0, 0, error=f"{type(exc).__name__}: {exc}")
+    if accuracy:
+        try:
+            result.map50_95 = coco128_map(detector)
+        except Exception as exc:   # keep the timings even if validation fails
+            print(f"   accuracy check failed: {type(exc).__name__}: {exc}")
+    return result
+
+
+def coco128_map(detector: Detector) -> float:
+    """mAP50-95 on the 128-image COCO128 set, same settings for every backend.
+
+    rect=False feeds every backend a square 640x640 letterboxed image; that is
+    the only shape the exported models accept, so PyTorch has to match it for
+    the numbers to be comparable.
+    """
+    from ultralytics.nn.autobackend import AutoBackend
+
+    # Ultralytics 8.3.170 reads AutoBackend.batch_size when validating a TensorRT
+    # engine but does not set it with TensorRT 10; our engines are built for batch 1.
+    if not hasattr(AutoBackend, "batch_size"):
+        AutoBackend.batch_size = 1
+    metrics = detector.model.val(data="coco128.yaml", imgsz=detector.imgsz, batch=1,
+                                 rect=False, half=detector.half, device=detector.device,
+                                 verbose=False, plots=False, project="outputs/val",
+                                 name=detector.weights.stem, exist_ok=True)
+    return float(metrics.box.map)
 
 
 def format_table(results: list[Result]) -> str:
@@ -89,8 +113,8 @@ def format_table(results: list[Result]) -> str:
     ok = [r for r in results if not r.error]
     base = ok[0].mean_ms if ok else 1
     with_map = any(r.map50_95 is not None for r in ok)
-    head = "| Backend | File size | Mean | p50 | p95 | FPS | Speed-up | Objects |"
-    rule = "|---|---|---|---|---|---|---|---|"
+    head = "| Backend | File size | Frame mean | p50 | p95 | FPS | Speed-up | Network only | Objects |"
+    rule = "|---|---|---|---|---|---|---|---|---|"
     if with_map:
         head, rule = head + " mAP50-95 |", rule + "---|"
     lines = [head, rule]
@@ -99,7 +123,8 @@ def format_table(results: list[Result]) -> str:
             lines.append(f"| {r.backend} | failed: {r.error[:60]} |")
             continue
         row = (f"| {r.backend} | {r.size_mb:.1f} MB | {r.mean_ms:.1f} ms | {r.p50_ms:.1f} ms | "
-               f"{r.p95_ms:.1f} ms | {r.fps:.0f} | {base / r.mean_ms:.2f}x | {r.detections} |")
+               f"{r.p95_ms:.1f} ms | {r.fps:.0f} | {base / r.mean_ms:.2f}x | {r.network_ms:.1f} ms | "
+               f"{r.detections} |")
         if with_map:
             row += f" {r.map50_95:.3f} |" if r.map50_95 is not None else " |"
         lines.append(row)

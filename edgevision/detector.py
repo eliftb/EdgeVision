@@ -44,6 +44,7 @@ class Detector:
         # Exported models have their precision baked in; `half` only applies to .pt.
         self.half = half and self.weights.suffix == ".pt" and self.device != "cpu"
         self.model = YOLO(str(self.weights), task="detect")
+        self.last_network_ms = 0.0   # network forward pass alone, for the last frame
 
     @property
     def backend(self) -> str:
@@ -54,6 +55,7 @@ class Detector:
         """Run one BGR frame through preprocessing, the network and NMS."""
         result = self.model.predict(frame, conf=self.conf, imgsz=self.imgsz,
                                     device=self.device, half=self.half, verbose=False)[0]
+        self.last_network_ms = result.speed["inference"]
         boxes = result.boxes
         # .cpu() waits for the GPU to finish, so timing detect() measures real latency.
         return detections_from_arrays(boxes.xyxy.cpu().numpy(), boxes.conf.cpu().numpy(),
