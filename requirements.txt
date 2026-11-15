@@ -1,8 +1,13 @@
-opencv-python==4.8.1.78
-numpy==1.24.3
-torch==2.0.1
-torchvision==0.15.2
-ultralytics==8.0.196
-pillow==10.0.0
-tqdm==4.66.1
-pyyaml==6.0.1
+# Pipeline (python main.py)
+torch>=2.0
+ultralytics>=8.3
+opencv-python>=4.8
+numpy<2
+pytest
+
+# Optional runtimes for edgevision.export / edgevision.benchmark.
+# Pick the builds that match your CUDA version; these are the ones measured in the README.
+# onnx>=1.14,<1.17
+# onnxslim
+# onnxruntime-gpu==1.18.1     # CUDA 11.8
+# tensorrt-cu11               # TensorRT for CUDA 11

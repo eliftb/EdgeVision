@@ -1,2 +1,14 @@
-yolov8n.pt
+# model weights and exported engines (downloaded / generated on first run)
+*.pt
+*.onnx
+*.engine
+# recordings and results
+*.mp4
+outputs/
+# environments and caches
+.venv/
 venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+*.save
